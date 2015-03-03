@@ -8,6 +8,12 @@ Default metrics:
 - percentage of 4xx and 5xx errors per endpoint
 - response time per endpoint
 
+The library is consisting of two parts:
+- sending metrics to NewRelic Plugin API
+- updating the HTTP metrics (on every request)
+
+Metrics will be collected and sent to NewRelic every 60 seconds by a separate go routine. Updating the HTTP metrics requires that you wrap your request handler with a function that updates the metrics (see example below). 
+
 ## Basic usage
 
 Create a default reporter that uses default metrics.
