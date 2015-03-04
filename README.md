@@ -16,7 +16,7 @@ Metrics will be collected and sent to NewRelic every 60 seconds by a separate go
 
 Ideally you will create your own dashboards and graphs in NewRelic (see the Custom NewRelic Plugin at the bottom of the page). Example of a dashboard you can see here.
 
-![Dashboard](http://imgur.com/1O2lfqb)
+![Dashboard](http://i.imgur.com/1O2lfqb.png)
 
 ## Basic usage
 
