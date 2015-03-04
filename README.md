@@ -12,7 +12,11 @@ The library is consisting of two parts:
 - sending metrics to NewRelic Plugin API
 - updating the HTTP metrics (on every request)
 
-Metrics will be collected and sent to NewRelic every 60 seconds by a separate go routine. Updating the HTTP metrics requires that you wrap your request handler with a function that updates the metrics (see example below). 
+Metrics will be collected and sent to NewRelic every 60 seconds by a separate go routine. Updating the HTTP metrics requires that you wrap your request handler with a function that updates the metrics (see example below).
+
+Ideally you will create your own dashboards and graphs in NewRelic (see the Custom NewRelic Plugin at the bottom of the page). Example of a dashboard you can see here.
+
+[Dashboard](http://imgur.com/1O2lfqb)
 
 ## Basic usage
 
