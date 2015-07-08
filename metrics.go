@@ -62,6 +62,11 @@ func (m *StandardMetric) endpointName(params map[string]interface{}) string {
 // ReqPerEndpoint holds number of requests per endpoint
 type ReqPerEndpoint struct {
 	*StandardMetric
+	snapshots []*ReqPerEndpointSnapshot
+}
+
+type ReqPerEndpointSnapshot struct {
+	reqCount map[string]int
 }
 
 // NewReqPerEndpoint creates new ReqPerEndpoint metric
@@ -91,20 +96,29 @@ func (m *ReqPerEndpoint) Update(params map[string]interface{}) error {
 	return nil
 }
 
-// ValueMap extract all the metrics to be reported
-func (m *ReqPerEndpoint) ValueMap() map[string]float32 {
-
-	metricMap := make(map[string]float32)
-
+func (m *ReqPerEndpoint) doSnapshot() {
 	m.lock.Lock()
 	defer m.lock.Unlock()
 
-	var numReqAllEndpoints int
-	for endpoint, value := range m.reqCount {
-		metricName := m.namePrefix + endpoint + m.metricUnit
-		metricMap[metricName] = float32(value)
+	m.snapshots = append(m.snapshots, &ReqPerEndpointSnapshot{reqCount: m.reqCount})
+	m.reqCount = make(map[string]int)
+}
 
-		numReqAllEndpoints += value
+// ValueMap extract all the metrics to be reported
+func (m *ReqPerEndpoint) ValueMap() map[string]float32 {
+
+	m.doSnapshot()
+
+	metricMap := make(map[string]float32)
+
+	var numReqAllEndpoints int
+	for _, snapshot := range m.snapshots {
+		for endpoint, value := range snapshot.reqCount {
+			metricName := m.namePrefix + endpoint + m.metricUnit
+			metricMap[metricName] = float32(value)
+
+			numReqAllEndpoints += value
+		}
 	}
 
 	m.reqCount = make(map[string]int)
@@ -112,6 +126,10 @@ func (m *ReqPerEndpoint) ValueMap() map[string]float32 {
 	metricMap[m.allEPNamePrefix+m.metricUnit] = float32(numReqAllEndpoints)
 
 	return metricMap
+}
+
+func (m *ReqPerEndpoint) Clear() {
+	m.snapshots = make([]*ReqPerEndpointSnapshot, 0)
 }
 
 /**************************************************
