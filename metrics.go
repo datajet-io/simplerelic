@@ -22,31 +22,25 @@ type AppMetric interface {
 	// Note that this function is also responsible for clearing the values
 	// after they have been reported.
 	ValueMap() map[string]float32
+
+	// Clear resets all the metric values
+	Clear()
 }
 
 const (
 	unknownEndpoint = "other"
 )
 
-// StandardMetric is a base for metrics dealing with endpoints
-type StandardMetric struct {
-	endpoints       map[string]func(urlPath string) bool
-	reqCount        map[string]int
-	lock            sync.RWMutex
-	namePrefix      string
-	allEPNamePrefix string
-	metricUnit      string
+// MetricBase is a base for metrics dealing with endpoints
+type MetricBase struct {
+	endpoints         map[string]func(urlPath string) bool
+	lock              sync.RWMutex
+	namePrefix        string
+	namePrefixOverall string
+	metricUnit        string
 }
 
-func (m *StandardMetric) initReqCount() {
-	// initialize the metrics
-	for endpoint := range m.endpoints {
-		m.reqCount[endpoint] = 0
-	}
-	m.reqCount[unknownEndpoint] = 0
-}
-
-func (m *StandardMetric) endpointName(params map[string]interface{}) string {
+func (m *MetricBase) endpointName(params map[string]interface{}) string {
 	endpointName, ok := params["endpointName"]
 	if !ok {
 		return unknownEndpoint
@@ -61,27 +55,33 @@ func (m *StandardMetric) endpointName(params map[string]interface{}) string {
 
 // ReqPerEndpoint holds number of requests per endpoint
 type ReqPerEndpoint struct {
-	*StandardMetric
+	*MetricBase
+	numReq    map[string]int
 	snapshots []*ReqPerEndpointSnapshot
 }
 
+// ReqPerEndpointSnapshot is a struct containing snapshot of the metric values
 type ReqPerEndpointSnapshot struct {
-	reqCount map[string]int
+	numReq map[string]int
 }
 
 // NewReqPerEndpoint creates new ReqPerEndpoint metric
 func NewReqPerEndpoint() *ReqPerEndpoint {
 
 	metric := &ReqPerEndpoint{
-		StandardMetric: &StandardMetric{
-			reqCount:        make(map[string]int),
-			namePrefix:      "Component/ReqPerEndpoint/",
-			allEPNamePrefix: "Component/Req/overall",
-			metricUnit:      "[requests]",
+		MetricBase: &MetricBase{
+			namePrefix:        "Component/ReqPerEndpoint/",
+			namePrefixOverall: "Component/Req/overall",
+			metricUnit:        "[requests]",
 		},
+		numReq: make(map[string]int),
 	}
 
-	metric.initReqCount()
+	// initialize the metrics
+	for endpoint := range metric.endpoints {
+		metric.numReq[endpoint] = 0
+	}
+	metric.numReq[unknownEndpoint] = 0
 
 	return metric
 }
@@ -90,7 +90,7 @@ func NewReqPerEndpoint() *ReqPerEndpoint {
 func (m *ReqPerEndpoint) Update(params map[string]interface{}) error {
 	endpointName := m.endpointName(params)
 	m.lock.Lock()
-	m.reqCount[endpointName]++
+	m.numReq[endpointName]++
 	m.lock.Unlock()
 
 	return nil
@@ -100,34 +100,35 @@ func (m *ReqPerEndpoint) doSnapshot() {
 	m.lock.Lock()
 	defer m.lock.Unlock()
 
-	m.snapshots = append(m.snapshots, &ReqPerEndpointSnapshot{reqCount: m.reqCount})
-	m.reqCount = make(map[string]int)
+	m.snapshots = append(m.snapshots, &ReqPerEndpointSnapshot{numReq: m.numReq})
+	m.numReq = make(map[string]int)
 }
 
-// ValueMap extract all the metrics to be reported
+// ValueMap extract the metrics values to be reported
 func (m *ReqPerEndpoint) ValueMap() map[string]float32 {
 
 	m.doSnapshot()
 
-	metricMap := make(map[string]float32)
+	reqCount := make(map[string]float32)
 
 	var numReqAllEndpoints int
 	for _, snapshot := range m.snapshots {
-		for endpoint, value := range snapshot.reqCount {
+		for endpoint, value := range snapshot.numReq {
 			metricName := m.namePrefix + endpoint + m.metricUnit
-			metricMap[metricName] = float32(value)
+			reqCount[metricName] += float32(value)
 
 			numReqAllEndpoints += value
 		}
 	}
 
-	m.reqCount = make(map[string]int)
+	m.numReq = make(map[string]int)
 
-	metricMap[m.allEPNamePrefix+m.metricUnit] = float32(numReqAllEndpoints)
+	reqCount[m.namePrefixOverall+m.metricUnit] = float32(numReqAllEndpoints)
 
-	return metricMap
+	return reqCount
 }
 
+// Clear deletes all saved snapshot
 func (m *ReqPerEndpoint) Clear() {
 	m.snapshots = make([]*ReqPerEndpointSnapshot, 0)
 }
@@ -138,31 +139,43 @@ func (m *ReqPerEndpoint) Clear() {
 
 // ErrorRatePerEndpoint holds the percentage of error requests per endpoint
 type ErrorRatePerEndpoint struct {
-	*StandardMetric
+	*MetricBase
+	numReq     map[string]int
+	errorCount map[string]int
+	snapshots  []*ErrorRatePerEndpointSnapshot
+}
+
+// ErrorRatePerEndpointSnapshot is a struct containing snapshot of the metric values
+type ErrorRatePerEndpointSnapshot struct {
+	numReq     map[string]int
 	errorCount map[string]int
 }
 
-// NewErrorRatePerEndpoint creates new POEPerEndpoint metric
+// NewErrorRatePerEndpoint creates a metric tracking error rates per endpoint
 func NewErrorRatePerEndpoint() *ErrorRatePerEndpoint {
 
 	metric := &ErrorRatePerEndpoint{
-		StandardMetric: &StandardMetric{
-			reqCount:        make(map[string]int),
-			namePrefix:      "Component/ErrorRatePerEndpoint/",
-			allEPNamePrefix: "Component/ErrorRate/overall",
-			metricUnit:      "[percent]",
+		MetricBase: &MetricBase{
+			namePrefix:        "Component/ErrorRatePerEndpoint/",
+			namePrefixOverall: "Component/ErrorRate/overall",
+			metricUnit:        "[percent]",
 		},
+		numReq:     make(map[string]int),
 		errorCount: make(map[string]int),
 	}
 
-	// initialize the metrics
-	metric.initReqCount()
-	for endpoint := range metric.endpoints {
-		metric.errorCount[endpoint] = 0
-	}
-	metric.errorCount[unknownEndpoint] = 0
+	metric.init()
 
 	return metric
+}
+
+func (m *ErrorRatePerEndpoint) init() {
+	for endpoint := range m.endpoints {
+		m.numReq[endpoint] = 0
+		m.errorCount[endpoint] = 0
+	}
+	m.numReq[unknownEndpoint] = 0
+	m.errorCount[unknownEndpoint] = 0
 }
 
 // Update the metric values
@@ -172,43 +185,67 @@ func (m *ErrorRatePerEndpoint) Update(params map[string]interface{}) error {
 	if params["statusCode"].(int) >= 400 {
 		m.errorCount[endpointName]++
 	}
-	m.reqCount[endpointName]++
+	m.numReq[endpointName]++
 	m.lock.Unlock()
 
 	return nil
 }
 
+func (m *ErrorRatePerEndpoint) doSnapshot() {
+	m.lock.Lock()
+	defer m.lock.Unlock()
+
+	m.snapshots = append(m.snapshots, &ErrorRatePerEndpointSnapshot{
+		numReq:     m.numReq,
+		errorCount: m.errorCount,
+	})
+
+	m.init()
+}
+
 // ValueMap extract all the metrics to be reported
 func (m *ErrorRatePerEndpoint) ValueMap() map[string]float32 {
 
-	metrics := make(map[string]float32)
+	m.doSnapshot()
 
-	m.lock.Lock()
-	var allEPErrors int
-	var reqAllEndpoints int
-	for endpoint := range m.errorCount {
+	errorCount := make(map[string]int)
+	requestCount := make(map[string]int)
+
+	for _, snapshot := range m.snapshots {
+		for endpoint := range snapshot.errorCount {
+			errorCount[endpoint] += snapshot.errorCount[endpoint]
+			requestCount[endpoint] += snapshot.numReq[endpoint]
+		}
+	}
+
+	errorRate := make(map[string]float32)
+
+	var errorCountOverall int
+	var requestCountOverall int
+
+	for endpoint := range errorCount {
 		metricName := m.namePrefix + endpoint + m.metricUnit
 
-		metrics[metricName] = 0.
-		if overallReq := float32(m.reqCount[endpoint]); overallReq > 0.0 {
-			metrics[metricName] = float32(m.errorCount[endpoint]) / overallReq
+		errorRate[metricName] = 0.
+		if overallReq := float32(requestCount[endpoint]); overallReq > 0.0 {
+			errorRate[metricName] = float32(errorCount[endpoint]) / overallReq
 		}
 
-		allEPErrors += m.errorCount[endpoint]
-		reqAllEndpoints += m.reqCount[endpoint]
-
-		m.errorCount[endpoint] = 0
-		m.reqCount[endpoint] = 0
+		errorCountOverall += errorCount[endpoint]
+		requestCountOverall += requestCount[endpoint]
 	}
 
-	metrics[m.allEPNamePrefix+m.metricUnit] = 0.
-	if reqAllEndpoints > 0 {
-		metrics[m.allEPNamePrefix+m.metricUnit] = float32(allEPErrors) / float32(reqAllEndpoints)
+	errorRate[m.namePrefixOverall+m.metricUnit] = 0.
+	if requestCountOverall > 0 {
+		errorRate[m.namePrefixOverall+m.metricUnit] = float32(errorCountOverall) / float32(requestCountOverall)
 	}
 
-	m.lock.Unlock()
+	return errorRate
+}
 
-	return metrics
+// Clear deletes all saved snapshot
+func (m *ErrorRatePerEndpoint) Clear() {
+	m.snapshots = make([]*ErrorRatePerEndpointSnapshot, 0)
 }
 
 /**************************************************
@@ -217,7 +254,8 @@ func (m *ErrorRatePerEndpoint) ValueMap() map[string]float32 {
 
 // ResponseTimePerEndpoint tracks the response time per endpoint
 type ResponseTimePerEndpoint struct {
-	*StandardMetric
+	*MetricBase
+	numReq          map[string]int
 	responseTimeMap map[string][]float32
 }
 
@@ -225,18 +263,15 @@ type ResponseTimePerEndpoint struct {
 func NewResponseTimePerEndpoint() *ResponseTimePerEndpoint {
 
 	metric := &ResponseTimePerEndpoint{
-		StandardMetric: &StandardMetric{
-			reqCount:        make(map[string]int),
-			namePrefix:      "Component/ResponseTimePerEndpoint/",
-			allEPNamePrefix: "Component/ResponseTime/overall",
-			metricUnit:      "[ms]",
+		MetricBase: &MetricBase{
+			namePrefix:        "Component/ResponseTimePerEndpoint/",
+			namePrefixOverall: "Component/ResponseTime/overall",
+			metricUnit:        "[ms]",
 		},
-
+		numReq:          make(map[string]int),
 		responseTimeMap: make(map[string][]float32),
 	}
 
-	// initialize the metrics
-	metric.initReqCount()
 	for endpoint := range metric.endpoints {
 		metric.responseTimeMap[endpoint] = make([]float32, 1)
 	}
@@ -257,7 +292,7 @@ func (m *ResponseTimePerEndpoint) Update(params map[string]interface{}) error {
 
 	endpointName := m.endpointName(params)
 	m.lock.Lock()
-	m.reqCount[endpointName]++
+	m.numReq[endpointName]++
 	m.responseTimeMap[endpointName] = append(m.responseTimeMap[endpointName], elaspsedTimeInMs)
 	m.lock.Unlock()
 
@@ -285,21 +320,26 @@ func (m *ResponseTimePerEndpoint) ValueMap() map[string]float32 {
 		metricName := m.namePrefix + endpoint + m.metricUnit
 		metrics[metricName] = 0.
 
-		if numReq := float32(m.reqCount[endpoint]); numReq > 0 {
+		if numReq := float32(m.numReq[endpoint]); numReq > 0 {
 			metrics[metricName] = float32(responseTimeSum) / numReq
 		}
 
 		responseTimeAllEndpoints += responseTimeSum
-		numReqAllEndpoints += m.reqCount[endpoint]
+		numReqAllEndpoints += m.numReq[endpoint]
 
-		m.reqCount[endpoint] = 0
+		m.numReq[endpoint] = 0
 		m.responseTimeMap[endpoint] = make([]float32, 1)
 	}
 
-	metrics[m.allEPNamePrefix+m.metricUnit] = 0.
+	metrics[m.namePrefixOverall+m.metricUnit] = 0.
 	if numReqAllEndpoints > 0 {
-		metrics[m.allEPNamePrefix+m.metricUnit] = responseTimeAllEndpoints / float32(numReqAllEndpoints)
+		metrics[m.namePrefixOverall+m.metricUnit] = responseTimeAllEndpoints / float32(numReqAllEndpoints)
 	}
 
 	return metrics
+}
+
+// Clear deletes all saved snapshot
+func (m *ResponseTimePerEndpoint) Clear() {
+	//m.snapshots = make([]*ReqPerEndpointSnapshot, 0)
 }
